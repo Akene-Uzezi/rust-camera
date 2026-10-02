@@ -176,4 +176,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Capturing frame");
+
+    unsafe {
+        ioctl(fd, VIDIOC_DQBUF, &mut buf as *mut _ as *mut _);
+    }
+
+    let frame_data =
+        unsafe { std::slice::from_raw_parts(buffer_ptr as *const u8, buf.bytesused as usize) };
+    let mut out_file = File::create("captured_frame.jpg")?;
+    out_file.write_all(frame_data)?;
+
+    println!("saved frame to captured_frame!");
+
+    unsafe {
+        let mut type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ioctl(fd, VIDIOC_STREAMOFF, &mut type_ as *mut _ as *mut _);
+        munmap(buffer_ptr, buf.length as usize);
+    }
+
+    Ok(())
 }
