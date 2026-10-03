@@ -22,6 +22,8 @@ const MAP_FAILED: *mut std::ffi::c_void = !0 as *mut std::ffi::c_void;
 
 const V4L2_BUF_TYPE_VIDEO_CAPTURE: u32 = 1;
 const V4L2_MEMORY_MMAP: u32 = 1;
+const V4L2_CAP_VIDEO_CAPTURE: u32 = 0x00000001;
+const V4L2_CAP_STREAMING: u32 = 0x08000000;
 
 const V4L2_PIX_FMT_MJPEG: u32 = u32::from_le_bytes(*b"MJPG");
 
@@ -45,7 +47,8 @@ pub struct V4l2PixFormat {
 #[repr(C)]
 pub struct V4l2Format {
     pub type_: u32,
-    pub fmt: [u8; 200], // Raw union buffer padding
+    pub _pad: [u8; 4],
+    pub fmt: [u8; 200],
 }
 
 #[repr(C)]
@@ -59,18 +62,30 @@ pub struct V4l2RequestBuffers {
 
 #[repr(C)]
 #[derive(Default)]
+pub struct V4l2Capability {
+    pub driver: [u8; 16],
+    pub card: [u8; 32],
+    pub bus_info: [u8; 32],
+    pub version: u32,
+    pub capabilities: u32,
+    pub device_caps: u32,
+    pub reserved: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Default)]
 pub struct V4l2Buffer {
     pub index: u32,
     pub type_: u32,
     pub bytesused: u32,
     pub flags: u32,
     pub field: u32,
-    pub timestamp_sec: i64,
-    pub timestamp_usec: i64,
-    pub timecode_type: u32,
-    pub timecode: [u8; 16],
+    pub timestamp_sec: u32,
+    pub timestamp_usec: u32,
+    pub timecode: [u8; 28],
     pub sequence: u32,
     pub memory: u32,
+    pub _pad: [u8; 4],
     pub m: u64,
     pub length: u32,
     pub reserved2: u32,
@@ -98,6 +113,7 @@ const VIDIOC_QBUF: u64 = ioctl_iowr::<V4l2Buffer>('V' as u8, 15);
 const VIDIOC_DQBUF: u64 = ioctl_iowr::<V4l2Buffer>('V' as u8, 17);
 const VIDIOC_STREAMON: u64 = ioctl_iow::<u32>('V' as u8, 18);
 const VIDIOC_STREAMOFF: u64 = ioctl_iow::<u32>('V' as u8, 19);
+const VIDIOC_QUERYCAP: u64 = ioctl_iowr::<V4l2Capability>('V' as u8, 0);
 
 fn check_ioctl(ret: i32, msg: &str) -> Result<(), Box<dyn std::error::Error>> {
     if ret < 0 {
@@ -112,8 +128,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .write(true)
         .open("/dev/video0")?;
     let fd = dev.as_raw_fd();
+
+    let mut cap = V4l2Capability::default();
+    unsafe {
+        check_ioctl(
+            ioctl(fd, VIDIOC_QUERYCAP, &mut cap as *mut _ as *mut _),
+            "VIDIOC_QUERYCAP",
+        )?;
+    }
+    let caps = if cap.capabilities != 0 {
+        cap.capabilities
+    } else {
+        cap.device_caps
+    };
+    if caps & (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING)
+        != (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING)
+    {
+        return Err("device does not support video capture + streaming mmap".into());
+    }
+
     let mut fmt = V4l2Format {
         type_: V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        _pad: [0; 4],
         fmt: [0; 200],
     };
 
@@ -121,7 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: 640,
         height: 480,
         pixelformat: V4L2_PIX_FMT_MJPEG,
-        field: 1, // V4L2_FIELD_ANY
+        field: 0,
         bytesperline: 0,
         sizeimage: 0,
         colorspace: 0,
