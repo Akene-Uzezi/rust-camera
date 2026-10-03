@@ -67,10 +67,11 @@ pub struct V4l2Buffer {
     pub field: u32,
     pub timestamp_sec: i64,
     pub timestamp_usec: i64,
-    pub timecode: [u8; 12],
+    pub timecode_type: u32,
+    pub timecode: [u8; 16],
     pub sequence: u32,
     pub memory: u32,
-    pub m_offset: u32,
+    pub m: u64,
     pub length: u32,
     pub reserved2: u32,
     pub request_fd: i32,
@@ -97,6 +98,13 @@ const VIDIOC_QBUF: u64 = ioctl_iowr::<V4l2Buffer>('V' as u8, 15);
 const VIDIOC_DQBUF: u64 = ioctl_iowr::<V4l2Buffer>('V' as u8, 17);
 const VIDIOC_STREAMON: u64 = ioctl_iow::<u32>('V' as u8, 18);
 const VIDIOC_STREAMOFF: u64 = ioctl_iow::<u32>('V' as u8, 19);
+
+fn check_ioctl(ret: i32, msg: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if ret < 0 {
+        return Err(format!("{} failed: {}", msg, std::io::Error::last_os_error()).into());
+    }
+    Ok(())
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dev = OpenOptions::new()
@@ -131,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fmt.fmt.as_mut_ptr(),
             std::mem::size_of::<V4l2PixFormat>(),
         );
-        ioctl(fd, VIDIOC_S_FMT, &mut fmt as *mut _ as _);
+        check_ioctl(ioctl(fd, VIDIOC_S_FMT, &mut fmt as *mut _ as _), "VIDIOC_S_FMT")?;
     }
 
     let mut req = V4l2RequestBuffers {
@@ -141,7 +149,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     unsafe {
-        ioctl(fd, VIDIOC_REQBUFS, &mut req as *mut _ as *mut _);
+        check_ioctl(
+            ioctl(fd, VIDIOC_REQBUFS, &mut req as *mut _ as *mut _),
+            "VIDIOC_REQBUFS",
+        )?;
     }
 
     let mut buf = V4l2Buffer {
@@ -151,7 +162,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     unsafe {
-        ioctl(fd, VIDIOC_QUERYBUF, &mut buf as *mut _ as *mut _);
+        check_ioctl(
+            ioctl(fd, VIDIOC_QUERYBUF, &mut buf as *mut _ as *mut _),
+            "VIDIOC_QUERYBUF",
+        )?;
     }
 
     let buffer_ptr = unsafe {
@@ -161,7 +175,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PROT_READ | PROT_WRITE,
             MAP_SHARED,
             fd,
-            buf.m_offset as i64,
+            buf.m as i64,
         )
     };
 
@@ -170,15 +184,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     unsafe {
-        ioctl(fd, VIDIOC_QBUF, &mut buf as *mut _ as *mut _);
+        check_ioctl(ioctl(fd, VIDIOC_QBUF, &mut buf as *mut _ as *mut _), "VIDIOC_QBUF")?;
         let mut type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        ioctl(fd, VIDIOC_STREAMON, &mut type_ as *mut _ as *mut _);
+        check_ioctl(
+            ioctl(fd, VIDIOC_STREAMON, &mut type_ as *mut _ as *mut _),
+            "VIDIOC_STREAMON",
+        )?;
     }
 
     println!("Capturing frame");
 
     unsafe {
-        ioctl(fd, VIDIOC_DQBUF, &mut buf as *mut _ as *mut _);
+        check_ioctl(
+            ioctl(fd, VIDIOC_DQBUF, &mut buf as *mut _ as *mut _),
+            "VIDIOC_DQBUF",
+        )?;
     }
 
     let frame_data =
@@ -190,7 +210,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     unsafe {
         let mut type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        ioctl(fd, VIDIOC_STREAMOFF, &mut type_ as *mut _ as *mut _);
+        check_ioctl(
+            ioctl(fd, VIDIOC_STREAMOFF, &mut type_ as *mut _ as *mut _),
+            "VIDIOC_STREAMOFF",
+        )?;
         munmap(buffer_ptr, buf.length as usize);
     }
 
